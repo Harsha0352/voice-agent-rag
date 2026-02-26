@@ -14,52 +14,51 @@ import uuid
 import time
 import asyncio
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
-from fastapi import APIRouter, BackgroundTasks
+from fastapi import APIRouter
 
-# Setup logging to file
-log_file = "app/backend.log"
+# Setup logging to stdout for Render
 logging.basicConfig(
-    filename=log_file,
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
 )
 logger = logging.getLogger("backend")
 
 def log_debug(msg):
-    print(msg)
     logger.info(msg)
 
 from contextlib import asynccontextmanager
 
 # Compatibility fix for coqui-tts on newer transformers/Python 3.13
-import transformers.pytorch_utils
-if not hasattr(transformers.pytorch_utils, "isin_mps_friendly"):
-    transformers.pytorch_utils.isin_mps_friendly = lambda x: False
+try:
+    import transformers.pytorch_utils
+    if not hasattr(transformers.pytorch_utils, "isin_mps_friendly"):
+        transformers.pytorch_utils.isin_mps_friendly = lambda x: False
+except ImportError:
+    pass
 
-# Windows espeak-ng path fix
-if os.name == 'nt':
-    espeak_paths = [
-        r"C:\Program Files\eSpeak NG",
-        r"C:\Program Files (x86)\eSpeak NG"
-    ]
-    for path in espeak_paths:
-        if os.path.exists(path) and path not in os.environ["PATH"]:
-            os.environ["PATH"] += os.pathsep + path
-            print(f"Added {path} to PATH for espeak-ng.")
-
-from app.rag.embeddings import EmbeddingManager
-from app.rag.vector_store import VectorStore
-from app.rag.generator import LLMGenerator
-from app.voice.stt import SpeechToText
-from app.voice.tts import TextToSpeech
+# Defer heavy imports to background loading
+EmbeddingManager = None
+VectorStore = None
+LLMGenerator = None
+SpeechToText = None
+TextToSpeech = None
 
 # Model storage
 models = {}
 
 async def load_models_task():
-    log_debug("Background: Initializing models...")
+    global EmbeddingManager, VectorStore, LLMGenerator, SpeechToText, TextToSpeech
+    log_debug("Background: Importing heavy models...")
     try:
+        from app.rag.embeddings import EmbeddingManager as EM
+        from app.rag.vector_store import VectorStore as VS
+        from app.rag.generator import LLMGenerator as LG
+        from app.voice.stt import SpeechToText as STT
+        from app.voice.tts import TextToSpeech as TTS
+        
+        EmbeddingManager, VectorStore, LLMGenerator, SpeechToText, TextToSpeech = EM, VS, LG, STT, TTS
+        
+        log_debug("Background: Initializing model instances...")
         embedding_manager = EmbeddingManager()
         
         vector_store = VectorStore(embedding_manager, logger=logger)
@@ -94,9 +93,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Create API router
-api_router = APIRouter()
-
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
     log_debug(f"Incoming: {request.method} {request.url.path}")
@@ -105,6 +101,9 @@ async def log_requests(request: Request, call_next):
     duration = time.time() - start_time
     log_debug(f"Response: {response.status_code} (took {duration:.2f}s)")
     return response
+
+# Create API router
+api_router = APIRouter()
 
 @api_router.get("/health")
 async def health_check():
@@ -147,7 +146,6 @@ async def chat_endpoint(query: ChatQuery):
 
         if not context_chunks:
              log_debug("No context chunks found. Proceeding with empty context.")
-             # No longer returning early, so the LLM can use general knowledge.
              context_chunks = []
 
         # 2. Generate model response
@@ -191,37 +189,23 @@ async def upload_pdf_endpoint(file: UploadFile = File(...)):
             buffer.write(content)
         log_debug(f"File saved successfully: {file_path} (Size: {len(content)} bytes)")
         
-        # Verify file exists on disk
-        if os.path.exists(file_path):
-            log_debug(f"[{txn_id}] Verification: File exists at {file_path}")
-        else:
-            log_debug(f"[{txn_id}] Verification FAILED: File NOT found at {file_path} after write!")
-        
         # Reload vector store to include the new PDF
         if "vector_store" in models:
             log_debug("Reloading vector store with new PDF...")
             loaded_ok = models["vector_store"].load_documents(doc_dir)
             if not loaded_ok:
-                # If no text could be extracted from any documents (e.g. invalid or scanned PDF),
-                # inform the user clearly instead of silently keeping an empty index.
-                log_debug(f"[{txn_id}] Vector store reload found no readable text. Likely invalid or image-only PDF.")
+                log_debug(f"[{txn_id}] Vector store reload found no readable text.")
                 raise HTTPException(
                     status_code=400,
-                    detail=(
-                        "Uploaded PDF could not be read as text. "
-                        "Please upload a proper text-based PDF (e.g., Export as PDF from Word/Docs) "
-                        "instead of renaming another file to .pdf."
-                    ),
+                    detail="Uploaded PDF could not be read as text.",
                 )
             log_debug("Vector store reloaded successfully.")
-        else:
-            log_debug("WARNING: vector_store model not found in models dict!")
         
         return {"message": f"Successfully uploaded and indexed {file.filename}"}
     except Exception as e:
         log_debug(f"CRITICAL ERROR uploading PDF: {e}")
-        import traceback
-        log_debug(traceback.format_exc())
+        if isinstance(e, HTTPException):
+            raise e
         raise HTTPException(status_code=500, detail=str(e))
 
 @api_router.post("/voice-query")
@@ -244,78 +228,53 @@ async def voice_query_endpoint(file: UploadFile = File(...)):
         # Save uploaded file
         with open(temp_audio_path, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
-        log_debug(f"Audio saved to {temp_audio_path}")
         
-        # 1. STT: Speech to Text
-        log_debug("Starting STT...")
+        # 1. STT
         user_text = models["stt"].transcribe(temp_audio_path)
         if not user_text:
-            log_debug("STT returned empty text.")
             raise HTTPException(status_code=400, detail="Could not transcribe audio")
         
-        log_debug(f"Transcibed: {user_text}")
-        
-        # 2. RAG: Search context
-        log_debug("Starting RAG search...")
+        # 2. RAG
         context_chunks = models["vector_store"].search(user_text)
-        log_debug(f"Found {len(context_chunks)} context chunks.")
         
-        # 3. LLM: Generate response text
-        log_debug("Starting LLM generation...")
+        # 3. LLM
         response_text = models["rag_generator"].generate_response(user_text, context_chunks)
-        log_debug(f"Generated text: {response_text[:50]}...")
         
-        if not response_text:
-            log_debug("LLM returned empty text.")
-            raise HTTPException(status_code=500, detail="LLM generated an empty response.")
-
-        # 4. TTS: Response text to Speech
-        log_debug("Starting TTS...")
+        # 4. TTS
         output_audio_path = models["tts"].generate_audio(response_text)
         
         if not output_audio_path:
              raise HTTPException(status_code=500, detail="TTS failed to generate audio")
 
-        log_debug(f"Audio generated at {output_audio_path}")
-        
-        # Return the generated WAV file
         return FileResponse(output_audio_path, media_type="audio/wav", filename="response.wav")
         
     except Exception as e:
         log_debug(f"CRITICAL ERROR in voice-query: {e}")
-        import traceback
-        log_debug(traceback.format_exc())
         if isinstance(e, HTTPException):
             raise e
-        # Return the error message in the detail for the frontend to see
         raise HTTPException(status_code=500, detail=f"Backend Error: {str(e)}")
     finally:
-        # Simple cleanup of input audio
         if os.path.exists(temp_audio_path):
             os.remove(temp_audio_path)
 
-# Include the API router with /api prefix
+# Include API router
 app.include_router(api_router, prefix="/api")
 
-# Serve frontend static files
+# Serve frontend
 frontend_path = os.path.join(os.getcwd(), "frontend/dist")
 if os.path.exists(frontend_path):
     app.mount("/", StaticFiles(directory=frontend_path, html=True), name="frontend")
-    log_debug(f"Frontend static files mounted from {frontend_path}")
-
-@app.get("/{full_path:path}")
-async def serve_frontend(full_path: str):
-    # Fallback for SPA routing
-    if full_path.startswith("api/"):
-         raise HTTPException(status_code=404)
     
-    index_file = os.path.join(frontend_path, "index.html")
-    if os.path.exists(index_file):
+    @app.get("/{full_path:path}")
+    async def catch_all(full_path: str):
+        index_file = os.path.join(frontend_path, "index.html")
         return FileResponse(index_file)
-    return {"message": "Voice Agent Backend is running."}
+else:
+    @app.get("/")
+    async def root():
+        return {"message": "Voice Agent Backend is running. Frontend missing."}
 
 if __name__ == "__main__":
     import uvicorn
-    # Render uses port 10000 by default
     port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)
