@@ -13,8 +13,9 @@ from pydantic import BaseModel
 import uuid
 import time
 import asyncio
+import threading
 from fastapi.staticfiles import StaticFiles
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 
 # Setup logging to stdout for Render
 logging.basicConfig(
@@ -46,8 +47,14 @@ TextToSpeech = None
 # Model storage
 models = {}
 
-async def load_models_task():
+def load_models_sync():
+    """Blocking function to load models in a separate thread."""
     global EmbeddingManager, VectorStore, LLMGenerator, SpeechToText, TextToSpeech
+    
+    # Give the server a few seconds to bind the port and stabilize
+    log_debug("Background: Waiting 10s before loading models...")
+    time.sleep(10)
+    
     log_debug("Background: Importing heavy models...")
     try:
         from app.rag.embeddings import EmbeddingManager as EM
@@ -77,8 +84,9 @@ async def load_models_task():
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Fire off model loading in the background so health check passes immediately
-    asyncio.create_task(load_models_task())
+    # Use a separate Thread (not asyncio task) so imports don't block the event loop
+    thread = threading.Thread(target=load_models_sync, daemon=True)
+    thread.start()
     yield
     # Cleanup if needed
     models.clear()
