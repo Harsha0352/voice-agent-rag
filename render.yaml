@@ -6,4 +6,6 @@ services:
     envVars:
       - key: HF_TOKEN
         sync: false # Set this in the Render dashboard manually
+      - key: PORT
+        value: 10000
     healthCheckPath: /api/health

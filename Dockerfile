@@ -22,9 +22,8 @@ RUN apt-get update && apt-get install -y \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy backend code
-COPY app/ ./app/
-COPY .env* ./
+# Copy project files
+COPY . .
 
 # Copy frontend build from stage 1
 COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
@@ -39,5 +38,5 @@ EXPOSE 10000
 ENV PYTHONUNBUFFERED=1
 ENV PORT=10000
 
-# Using uvicorn to run the app, ensuring it respects the PORT env var
-CMD ["python", "-m", "app.main"]
+# Using uvicorn directly to ensure Render detects the bound port
+CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "10000"]
