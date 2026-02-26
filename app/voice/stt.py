@@ -2,7 +2,7 @@ from faster_whisper import WhisperModel
 import os
 
 class SpeechToText:
-    def __init__(self, model_size: str = "base"):
+    def __init__(self, model_size: str = "tiny"):
         self.device = "cpu"
         self.compute_type = "int8" # Optimized for CPU
         print(f"Loading Whisper model '{model_size}' on {self.device}...")
