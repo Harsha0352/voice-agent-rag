@@ -12,9 +12,10 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 import uuid
 import time
+import asyncio
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse
-from fastapi import APIRouter
+from fastapi import APIRouter, BackgroundTasks
 
 # Setup logging to file
 log_file = "app/backend.log"
@@ -56,10 +57,8 @@ from app.voice.tts import TextToSpeech
 # Model storage
 models = {}
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    # Load all models once at startup
-    log_debug("Initializing models...")
+async def load_models_task():
+    log_debug("Background: Initializing models...")
     try:
         embedding_manager = EmbeddingManager()
         
@@ -71,11 +70,16 @@ async def lifespan(app: FastAPI):
         models["tts"] = TextToSpeech()
         models["vector_store"] = vector_store
         
-        log_debug("All models ready.")
+        log_debug("Background: All models ready.")
     except Exception as e:
-        log_debug(f"STARTUP ERROR: {e}")
+        log_debug(f"BACKGROUND LOAD ERROR: {e}")
         import traceback
         log_debug(traceback.format_exc())
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Fire off model loading in the background so health check passes immediately
+    asyncio.create_task(load_models_task())
     yield
     # Cleanup if needed
     models.clear()
@@ -309,5 +313,6 @@ async def serve_frontend(full_path: str):
 
 if __name__ == "__main__":
     import uvicorn
-    port = int(os.environ.get("PORT", 8000))
+    # Render uses port 10000 by default
+    port = int(os.environ.get("PORT", 10000))
     uvicorn.run(app, host="0.0.0.0", port=port)

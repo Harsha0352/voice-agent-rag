@@ -33,11 +33,11 @@ COPY --from=frontend-builder /app/frontend/dist ./frontend/dist
 RUN mkdir -p data/documents data/temp data/output_audio app/data/documents
 
 # Expose port
-EXPOSE 8000
+EXPOSE 10000
 
 # Set environment variables
 ENV PYTHONUNBUFFERED=1
-ENV PORT=8000
+ENV PORT=10000
 
 # Using uvicorn to run the app, ensuring it respects the PORT env var
 CMD ["python", "-m", "app.main"]
