@@ -97,7 +97,7 @@ app.add_middleware(
 # Create API router
 api_router = APIRouter()
 
-@api_router.middleware("http")
+@app.middleware("http")
 async def log_requests(request: Request, call_next):
     log_debug(f"Incoming: {request.method} {request.url.path}")
     start_time = time.time()
@@ -127,6 +127,9 @@ async def debug_endpoint():
         "doc_dir_exists": os.path.exists("app/data/documents"),
         "doc_files": os.listdir("app/data/documents") if os.path.exists("app/data/documents") else []
     }
+
+class ChatQuery(BaseModel):
+    message: str
 
 @api_router.post("/chat")
 async def chat_endpoint(query: ChatQuery):
