@@ -1,0 +1,17 @@
+.venv/
+venv/
+__pycache__/
+*.pyc
+app/backend.log
+data/output_audio/
+data/temp/
+app/data/documents/
+.env
+node_modules/
+frontend/node_modules/
+frontend/dist/
+.DS_Store
+*.bin
+*.wav
+*.mp3
+*.pdf

@@ -1,0 +1,15 @@
+services:
+  - type: web
+    name: voice-agent-rag
+    runtime: docker
+    plan: standard # Recommended for memory-intensive machine learning models
+    envVars:
+      - key: HF_TOKEN
+        sync: false # Set this in the Render dashboard manually
+      - key: PORT
+        value: 8000
+    healthCheckPath: /api/health
+    disk:
+      name: documents-storage
+      mountPath: /app/app/data/documents
+      sizeGB: 1

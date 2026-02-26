@@ -1,0 +1,18 @@
+fastapi
+uvicorn
+python-multipart
+faster-whisper
+sentence-transformers
+faiss-cpu
+huggingface-hub
+transformers
+accelerate
+torch --index-url https://download.pytorch.org/whl/cpu
+torchaudio --index-url https://download.pytorch.org/whl/cpu
+torchvision --index-url https://download.pytorch.org/whl/cpu
+coqui-tts[codec]
+numpy
+librosa
+soundfile
+python-dotenv
+pypdf
